@@ -33,30 +33,41 @@ func TestSetDefaultEndpointPort(t *testing.T) {
 	fooStr := "foo"
 	protoTCP := v1.ProtocolTCP
 	protoUDP := v1.ProtocolUDP
+	ipTargetType := discovery.IPTargetType
+	otherTargetType := discovery.TargetType("other")
 
 	tests := map[string]struct {
 		original *discovery.EndpointSlice
 		expected *discovery.EndpointSlice
 	}{
-		"empty endpointPort should default name and protocol": {
+		"should set appropriate defaults": {
 			original: &discovery.EndpointSlice{Ports: []discovery.EndpointPort{{
 				Port: utilpointer.Int32Ptr(80),
 			}}},
-			expected: &discovery.EndpointSlice{Ports: []discovery.EndpointPort{{
-				Name:     &emptyStr,
-				Protocol: &protoTCP,
-				Port:     utilpointer.Int32Ptr(80),
-			}}},
+			expected: &discovery.EndpointSlice{
+				TargetType: &ipTargetType,
+				Ports: []discovery.EndpointPort{{
+					Name:     &emptyStr,
+					Protocol: &protoTCP,
+					Port:     utilpointer.Int32Ptr(80),
+				}},
+			},
 		},
-		"name and protocol should not be overwritten when already set": {
-			original: &discovery.EndpointSlice{Ports: []discovery.EndpointPort{{
-				Name:     &fooStr,
-				Protocol: &protoUDP,
-			}}},
-			expected: &discovery.EndpointSlice{Ports: []discovery.EndpointPort{{
-				Name:     &fooStr,
-				Protocol: &protoUDP,
-			}}},
+		"should not overwrite values with defaults when set": {
+			original: &discovery.EndpointSlice{
+				TargetType: &otherTargetType,
+				Ports: []discovery.EndpointPort{{
+					Name:     &fooStr,
+					Protocol: &protoUDP,
+				}},
+			},
+			expected: &discovery.EndpointSlice{
+				TargetType: &otherTargetType,
+				Ports: []discovery.EndpointPort{{
+					Name:     &fooStr,
+					Protocol: &protoUDP,
+				}},
+			},
 		},
 	}
 

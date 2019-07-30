@@ -27,7 +27,10 @@ func addDefaultingFuncs(scheme *runtime.Scheme) error {
 }
 
 func SetDefaults_EndpointSlice(obj *discoveryv1alpha1.EndpointSlice) {
-	// No defaults at this level yet
+	if obj.TargetType == nil {
+		ipTargetType := discoveryv1alpha1.IPTargetType
+		obj.TargetType = &ipTargetType
+	}
 }
 
 func SetDefaults_EndpointPort(obj *discoveryv1alpha1.EndpointPort) {

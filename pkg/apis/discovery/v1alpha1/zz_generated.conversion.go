@@ -27,6 +27,7 @@ import (
 	v1alpha1 "k8s.io/api/discovery/v1alpha1"
 	conversion "k8s.io/apimachinery/pkg/conversion"
 	runtime "k8s.io/apimachinery/pkg/runtime"
+	core "k8s.io/kubernetes/pkg/apis/core"
 	discovery "k8s.io/kubernetes/pkg/apis/discovery"
 )
 
@@ -96,7 +97,7 @@ func autoConvert_v1alpha1_Endpoint_To_discovery_Endpoint(in *v1alpha1.Endpoint, 
 		return err
 	}
 	out.Hostname = (*string)(unsafe.Pointer(in.Hostname))
-	out.TargetRef = (*v1.ObjectReference)(unsafe.Pointer(in.TargetRef))
+	out.TargetRef = (*core.ObjectReference)(unsafe.Pointer(in.TargetRef))
 	out.Topology = *(*map[string]string)(unsafe.Pointer(&in.Topology))
 	return nil
 }
@@ -144,7 +145,7 @@ func Convert_discovery_EndpointConditions_To_v1alpha1_EndpointConditions(in *dis
 
 func autoConvert_v1alpha1_EndpointPort_To_discovery_EndpointPort(in *v1alpha1.EndpointPort, out *discovery.EndpointPort, s conversion.Scope) error {
 	out.Name = (*string)(unsafe.Pointer(in.Name))
-	out.Protocol = (*v1.Protocol)(unsafe.Pointer(in.Protocol))
+	out.Protocol = (*core.Protocol)(unsafe.Pointer(in.Protocol))
 	out.Port = (*int32)(unsafe.Pointer(in.Port))
 	return nil
 }

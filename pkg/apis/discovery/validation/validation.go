@@ -17,10 +17,10 @@ limitations under the License.
 package validation
 
 import (
-	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	api "k8s.io/kubernetes/pkg/apis/core"
 	apivalidation "k8s.io/kubernetes/pkg/apis/core/validation"
 	"k8s.io/kubernetes/pkg/apis/discovery"
 )
@@ -29,6 +29,15 @@ func ValidateEndpointSlice(endpointSlice *discovery.EndpointSlice) field.ErrorLi
 	allErrs := apivalidation.ValidateObjectMeta(&endpointSlice.ObjectMeta, true, apivalidation.ValidateReplicationControllerName, field.NewPath("metadata"))
 	allErrs = append(allErrs, ValidateEndpointSliceEndpoints(&endpointSlice.Endpoints, field.NewPath("endpoints"))...)
 	allErrs = append(allErrs, ValidateEndpointSlicePorts(&endpointSlice.Ports, field.NewPath("ports"))...)
+
+	if endpointSlice.TargetType == nil {
+		allErrs = append(allErrs, field.Required(field.NewPath("targetType"), ""))
+	}
+
+	if endpointSlice.TargetType != nil && *endpointSlice.TargetType != discovery.IPTargetType {
+		allErrs = append(allErrs, field.Invalid(field.NewPath("targetType"), *endpointSlice.TargetType, "Must be IP"))
+	}
+
 	return allErrs
 }
 
@@ -48,7 +57,7 @@ func ValidateEndpointSliceEndpoints(endpoints *[]discovery.Endpoint, fldPath *fi
 
 func ValidateEndpointSlicePorts(endpointPorts *[]discovery.EndpointPort, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
-	supportedPortProtocols := sets.NewString(string(v1.ProtocolTCP), string(v1.ProtocolUDP), string(v1.ProtocolSCTP))
+	supportedPortProtocols := sets.NewString(string(api.ProtocolTCP), string(api.ProtocolUDP), string(api.ProtocolSCTP))
 	portNames := sets.String{}
 
 	for i, endpointPort := range *endpointPorts {

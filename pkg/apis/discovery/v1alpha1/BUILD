@@ -12,6 +12,7 @@ go_library(
     importpath = "k8s.io/kubernetes/pkg/apis/discovery/v1alpha1",
     visibility = ["//visibility:public"],
     deps = [
+        "//pkg/apis/core:go_default_library",
         "//pkg/apis/discovery:go_default_library",
         "//staging/src/k8s.io/api/core/v1:go_default_library",
         "//staging/src/k8s.io/api/discovery/v1alpha1:go_default_library",

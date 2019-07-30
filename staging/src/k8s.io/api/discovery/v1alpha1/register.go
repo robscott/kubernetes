@@ -39,11 +39,10 @@ func Resource(resource string) schema.GroupResource {
 }
 
 var (
-	// TODO: move SchemeBuilder with zz_generated.deepcopy.go to k8s.io/api.
-	// localSchemeBuilder and AddToScheme will stay in k8s.io/kubernetes.
-	SchemeBuilder      = runtime.NewSchemeBuilder(addKnownTypes)
-	localSchemeBuilder = &SchemeBuilder
-	AddToScheme        = localSchemeBuilder.AddToScheme
+	// SchemeBuilder is the scheme builder with scheme init functions to run for this API package
+	SchemeBuilder = runtime.NewSchemeBuilder(addKnownTypes)
+	// AddToScheme is a common registration function for mapping packaged scoped group & version keys to a scheme
+	AddToScheme = SchemeBuilder.AddToScheme
 )
 
 // Adds the list of known types to the given scheme.

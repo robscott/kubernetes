@@ -20,6 +20,7 @@ import (
 	fuzz "github.com/google/gofuzz"
 
 	runtimeserializer "k8s.io/apimachinery/pkg/runtime/serializer"
+	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/apis/discovery"
 )
 
@@ -28,6 +29,24 @@ var Funcs = func(codecs runtimeserializer.CodecFactory) []interface{} {
 	return []interface{}{
 		func(obj *discovery.EndpointSlice, c fuzz.Continue) {
 			c.FuzzNoCustom(obj) // fuzz self without calling this function again
+
+			// match defaults
+			if obj.TargetType == nil {
+				ipTargetType := discovery.IPTargetType
+				obj.TargetType = &ipTargetType
+			}
+
+			for i, endpointPort := range obj.Ports {
+				if endpointPort.Name == nil {
+					emptyStr := ""
+					obj.Ports[i].Name = &emptyStr
+				}
+
+				if endpointPort.Protocol == nil {
+					protoTCP := api.ProtocolTCP
+					obj.Ports[i].Protocol = &protoTCP
+				}
+			}
 		},
 	}
 }

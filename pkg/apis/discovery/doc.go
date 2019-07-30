@@ -15,8 +15,6 @@ limitations under the License.
 */
 
 // +k8s:deepcopy-gen=package
-// +k8s:protobuf-gen=package
-// +k8s:openapi-gen=true
 // +groupName=discovery.k8s.io
 
 package discovery

@@ -19,8 +19,8 @@ package validation
 import (
 	"testing"
 
-	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/apis/discovery"
 )
 
@@ -34,7 +34,9 @@ func TestValidateEndpointSlice(t *testing.T) {
 	nameEmpty := ""
 	nameCaps := "ABCDEF"
 	nameChars := "almost_valid"
-	protoTCP := v1.ProtocolTCP
+	protoTCP := api.ProtocolTCP
+	targetTypeIP := discovery.IPTargetType
+	targetTypeOther := discovery.TargetType("Other")
 
 	testCases := map[string]struct {
 		isExpectedFailure bool
@@ -44,6 +46,7 @@ func TestValidateEndpointSlice(t *testing.T) {
 			isExpectedFailure: false,
 			endpointSlice: &discovery.EndpointSlice{
 				ObjectMeta: standardMeta,
+				TargetType: &targetTypeIP,
 				Ports: []discovery.EndpointPort{{
 					Name:     &nameHTTP,
 					Protocol: &protoTCP,
@@ -57,6 +60,7 @@ func TestValidateEndpointSlice(t *testing.T) {
 			isExpectedFailure: false,
 			endpointSlice: &discovery.EndpointSlice{
 				ObjectMeta: standardMeta,
+				TargetType: &targetTypeIP,
 				Ports: []discovery.EndpointPort{{
 					Name:     &nameEmpty,
 					Protocol: &protoTCP,
@@ -69,10 +73,11 @@ func TestValidateEndpointSlice(t *testing.T) {
 				}},
 			},
 		},
-		"empty-everything": {
+		"empty-ports-and-endpoints": {
 			isExpectedFailure: false,
 			endpointSlice: &discovery.EndpointSlice{
 				ObjectMeta: standardMeta,
+				TargetType: &targetTypeIP,
 				Ports:      []discovery.EndpointPort{},
 				Endpoints:  []discovery.Endpoint{},
 			},
@@ -83,6 +88,7 @@ func TestValidateEndpointSlice(t *testing.T) {
 			isExpectedFailure: true,
 			endpointSlice: &discovery.EndpointSlice{
 				ObjectMeta: standardMeta,
+				TargetType: &targetTypeIP,
 				Ports: []discovery.EndpointPort{{
 					Name:     &nameEmpty,
 					Protocol: &protoTCP,
@@ -97,6 +103,7 @@ func TestValidateEndpointSlice(t *testing.T) {
 			isExpectedFailure: true,
 			endpointSlice: &discovery.EndpointSlice{
 				ObjectMeta: standardMeta,
+				TargetType: &targetTypeIP,
 				Ports: []discovery.EndpointPort{{
 					Name:     &nameCaps,
 					Protocol: &protoTCP,
@@ -108,6 +115,7 @@ func TestValidateEndpointSlice(t *testing.T) {
 			isExpectedFailure: true,
 			endpointSlice: &discovery.EndpointSlice{
 				ObjectMeta: standardMeta,
+				TargetType: &targetTypeIP,
 				Ports: []discovery.EndpointPort{{
 					Name:     &nameChars,
 					Protocol: &protoTCP,
@@ -119,6 +127,7 @@ func TestValidateEndpointSlice(t *testing.T) {
 			isExpectedFailure: true,
 			endpointSlice: &discovery.EndpointSlice{
 				ObjectMeta: standardMeta,
+				TargetType: &targetTypeIP,
 				Ports: []discovery.EndpointPort{{
 					Name:     &nameHTTP,
 					Protocol: &protoTCP,
@@ -127,6 +136,24 @@ func TestValidateEndpointSlice(t *testing.T) {
 					Targets: []string{},
 				}},
 			},
+		},
+		"bad-target-type": {
+			isExpectedFailure: true,
+			endpointSlice: &discovery.EndpointSlice{
+				ObjectMeta: standardMeta,
+				TargetType: &targetTypeOther,
+				Ports: []discovery.EndpointPort{{
+					Name:     &nameHTTP,
+					Protocol: &protoTCP,
+				}},
+				Endpoints: []discovery.Endpoint{{
+					Targets: []string{},
+				}},
+			},
+		},
+		"empty-everything": {
+			isExpectedFailure: true,
+			endpointSlice:     &discovery.EndpointSlice{},
 		},
 	}
 
