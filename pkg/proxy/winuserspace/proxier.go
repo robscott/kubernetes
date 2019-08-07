@@ -27,7 +27,8 @@ import (
 
 	"k8s.io/klog"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
+	discovery "k8s.io/api/discovery/v1alpha1"
 	"k8s.io/apimachinery/pkg/types"
 	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/util/runtime"
@@ -458,6 +459,26 @@ func (proxier *Proxier) OnEndpointsDelete(endpoints *v1.Endpoints) {
 
 func (proxier *Proxier) OnEndpointsSynced() {
 	proxier.loadBalancer.OnEndpointsSynced()
+}
+
+// CacheEndpointSlices needs to be implemented for EndpointSlice support
+func (proxier *Proxier) CacheEndpointSlices(endpointSlices []*discovery.EndpointSlice) {
+	klog.V(4).Infof("CacheEndpointSlices is not implemented in winuserspace proxier")
+}
+
+// OnEndpointSliceUpdate needs to be implemented for EndpointSlice support
+func (proxier *Proxier) OnEndpointSliceUpdate(endpointSlice *discovery.EndpointSlice) {
+	klog.V(4).Infof("OnEndpointSliceUpdate is not implemented in winuserspace proxier")
+}
+
+// OnEndpointSliceDelete needs to be implemented for EndpointSlice support
+func (proxier *Proxier) OnEndpointSliceDelete(endpointSlice *discovery.EndpointSlice) {
+	klog.V(4).Infof("OnEndpointSliceDelete is not implemented in winuserspace proxier")
+}
+
+// OnEndpointSliceSynced needs to be implemented for EndpointSlice support
+func (proxier *Proxier) OnEndpointSliceSynced() {
+	klog.V(4).Infof("OnEndpointSliceSynced is not implemented in winuserspace proxier")
 }
 
 func sameConfig(info *serviceInfo, service *v1.Service, protocol v1.Protocol, listenPort int) bool {

@@ -26,7 +26,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
+	discovery "k8s.io/api/discovery/v1alpha1"
 	"k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	utilnet "k8s.io/apimachinery/pkg/util/net"
@@ -662,6 +663,26 @@ func (proxier *Proxier) OnEndpointsSynced() {
 	// service event handler on startup with large numbers
 	// of initial objects
 	go proxier.syncProxyRules()
+}
+
+// CacheEndpointSlices needs to be implemented for EndpointSlice support
+func (proxier *Proxier) CacheEndpointSlices(endpointSlices []*discovery.EndpointSlice) {
+	klog.V(4).Infof("CacheEndpointSlices is not implemented in userspace proxier")
+}
+
+// OnEndpointSliceUpdate needs to be implemented for EndpointSlice support
+func (proxier *Proxier) OnEndpointSliceUpdate(endpointSlice *discovery.EndpointSlice) {
+	klog.V(4).Infof("OnEndpointSliceUpdate is not implemented in userspace proxier")
+}
+
+// OnEndpointSliceDelete needs to be implemented for EndpointSlice support
+func (proxier *Proxier) OnEndpointSliceDelete(endpointSlice *discovery.EndpointSlice) {
+	klog.V(4).Infof("OnEndpointSliceDelete is not implemented in userspace proxier")
+}
+
+// OnEndpointSliceSynced needs to be implemented for EndpointSlice support
+func (proxier *Proxier) OnEndpointSliceSynced() {
+	klog.V(4).Infof("OnEndpointSliceSynced is not implemented in userspace proxier")
 }
 
 func sameConfig(info *ServiceInfo, service *v1.Service, port *v1.ServicePort) bool {

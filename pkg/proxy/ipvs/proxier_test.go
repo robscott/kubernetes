@@ -24,7 +24,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
+	discovery "k8s.io/api/discovery/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -41,6 +43,7 @@ import (
 	ipvstest "k8s.io/kubernetes/pkg/util/ipvs/testing"
 	"k8s.io/utils/exec"
 	fakeexec "k8s.io/utils/exec/testing"
+	utilpointer "k8s.io/utils/pointer"
 )
 
 const testHostname = "test-hostname"
@@ -131,33 +134,34 @@ func NewFakeProxier(ipt utiliptables.Interface, ipvs utilipvs.Interface, ipset u
 		ipsetList[is.name] = NewIPSet(ipset, is.name, is.setType, false, is.comment)
 	}
 	return &Proxier{
-		exec:              fexec,
-		serviceMap:        make(proxy.ServiceMap),
-		serviceChanges:    proxy.NewServiceChangeTracker(newServiceInfo, nil, nil),
-		endpointsMap:      make(proxy.EndpointsMap),
-		endpointsChanges:  proxy.NewEndpointChangeTracker(testHostname, nil, nil, nil),
-		excludeCIDRs:      excludeCIDRs,
-		iptables:          ipt,
-		ipvs:              ipvs,
-		ipset:             ipset,
-		clusterCIDR:       "10.0.0.0/24",
-		strictARP:         false,
-		hostname:          testHostname,
-		portsMap:          make(map[utilproxy.LocalPort]utilproxy.Closeable),
-		portMapper:        &fakePortOpener{[]*utilproxy.LocalPort{}},
-		healthChecker:     newFakeHealthChecker(),
-		ipvsScheduler:     DefaultScheduler,
-		ipGetter:          &fakeIPGetter{nodeIPs: nodeIPs},
-		iptablesData:      bytes.NewBuffer(nil),
-		filterChainsData:  bytes.NewBuffer(nil),
-		natChains:         bytes.NewBuffer(nil),
-		natRules:          bytes.NewBuffer(nil),
-		filterChains:      bytes.NewBuffer(nil),
-		filterRules:       bytes.NewBuffer(nil),
-		netlinkHandle:     netlinktest.NewFakeNetlinkHandle(),
-		ipsetList:         ipsetList,
-		nodePortAddresses: make([]string, 0),
-		networkInterfacer: proxyutiltest.NewFakeNetwork(),
+		exec:                  fexec,
+		serviceMap:            make(proxy.ServiceMap),
+		serviceChanges:        proxy.NewServiceChangeTracker(newServiceInfo, nil, nil),
+		endpointsMap:          make(proxy.EndpointsMap),
+		endpointsChanges:      proxy.NewEndpointChangeTracker(testHostname, nil, nil, nil),
+		excludeCIDRs:          excludeCIDRs,
+		iptables:              ipt,
+		ipvs:                  ipvs,
+		ipset:                 ipset,
+		clusterCIDR:           "10.0.0.0/24",
+		strictARP:             false,
+		hostname:              testHostname,
+		portsMap:              make(map[utilproxy.LocalPort]utilproxy.Closeable),
+		portMapper:            &fakePortOpener{[]*utilproxy.LocalPort{}},
+		healthChecker:         newFakeHealthChecker(),
+		ipvsScheduler:         DefaultScheduler,
+		ipGetter:              &fakeIPGetter{nodeIPs: nodeIPs},
+		iptablesData:          bytes.NewBuffer(nil),
+		filterChainsData:      bytes.NewBuffer(nil),
+		natChains:             bytes.NewBuffer(nil),
+		natRules:              bytes.NewBuffer(nil),
+		filterChains:          bytes.NewBuffer(nil),
+		filterRules:           bytes.NewBuffer(nil),
+		netlinkHandle:         netlinktest.NewFakeNetlinkHandle(),
+		ipsetList:             ipsetList,
+		nodePortAddresses:     make([]string, 0),
+		networkInterfacer:     proxyutiltest.NewFakeNetwork(),
+		gracefuldeleteManager: NewGracefulTerminationManager(ipvs),
 	}
 }
 
@@ -3188,4 +3192,87 @@ raid10 57344 0 - Live 0xffffffffc0597000`,
 			}
 		})
 	}
+}
+
+// The majority of EndpointSlice specific tests are not ipvs specific and focus on
+// the shared EndpointChangeTracker and EndpointSliceCache. This test ensures that the
+// ipvs proxier supports translating EndpointSlices to ipvs output.
+func TestEndpointSliceE2E(t *testing.T) {
+	ipt := iptablestest.NewFake()
+	ipvs := ipvstest.NewFake()
+	ipset := ipsettest.NewFake(testIPSetVersion)
+	fp := NewFakeProxier(ipt, ipvs, ipset, nil, nil)
+	fp.servicesSynced = true
+	fp.endpointsSynced = true
+	fp.endpointSliceSynced = true
+
+	// Add initial service
+	serviceName := "svc1"
+	namespaceName := "ns1"
+
+	fp.OnServiceAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: namespaceName},
+		Spec: v1.ServiceSpec{
+			ClusterIP: "172.20.1.1",
+			Selector:  map[string]string{"foo": "bar"},
+			Ports:     []v1.ServicePort{{TargetPort: intstr.FromInt(80)}},
+		},
+	})
+
+	// Add initial endpoint slice
+	ipTargetType := discovery.IPTargetType
+	endpointSlice := &discovery.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            fmt.Sprintf("%s-1", serviceName),
+			Namespace:       namespaceName,
+			OwnerReferences: []metav1.OwnerReference{{Kind: "Service", Name: serviceName}},
+		},
+		Ports:      []discovery.EndpointPort{{Port: utilpointer.Int32Ptr(80)}},
+		TargetType: &ipTargetType,
+		Endpoints: []discovery.Endpoint{{
+			Targets:    []string{"10.0.1.1"},
+			Conditions: discovery.EndpointConditions{Ready: true},
+			Topology:   map[string]string{"kubernetes.io/hostname": testHostname},
+		}, {
+			Targets:    []string{"10.0.1.2"},
+			Conditions: discovery.EndpointConditions{Ready: true},
+			Topology:   map[string]string{"kubernetes.io/hostname": "node2"},
+		}, {
+			Targets:    []string{"10.0.1.3"},
+			Conditions: discovery.EndpointConditions{Ready: true},
+			Topology:   map[string]string{"kubernetes.io/hostname": "node3"},
+		}},
+	}
+
+	fp.OnEndpointSliceUpdate(endpointSlice)
+	fp.syncProxyRules()
+
+	// Ensure that Proxier updates ipvs appropriately after EndpointSlice update
+	assert.NotNil(t, fp.ipsetList["KUBE-LOOP-BACK"])
+	activeEntries1 := fp.ipsetList["KUBE-LOOP-BACK"].activeEntries
+	assert.Equal(t, 1, activeEntries1.Len(), "Expected 1 active entry in KUBE-LOOP-BACK")
+	assert.Equal(t, true, activeEntries1.Has("10.0.1.1,tcp:80,10.0.1.1"), "Expected activeEntries to reference first (local) pod")
+	virtualServers1, vsErr1 := ipvs.GetVirtualServers()
+	assert.Nil(t, vsErr1, "Expected no error getting virtual servers")
+	assert.Len(t, virtualServers1, 1, "Expected 1 virtual server")
+	realServers1, rsErr1 := ipvs.GetRealServers(virtualServers1[0])
+	assert.Nil(t, rsErr1, "Expected no error getting real servers")
+	assert.Len(t, realServers1, 3, "Expected 3 real servers")
+	assert.Equal(t, realServers1[0].String(), "10.0.1.1:80")
+	assert.Equal(t, realServers1[1].String(), "10.0.1.2:80")
+	assert.Equal(t, realServers1[2].String(), "10.0.1.3:80")
+
+	fp.OnEndpointSliceDelete(endpointSlice)
+	fp.syncProxyRules()
+
+	// Ensure that Proxier updates ipvs appropriately after EndpointSlice delete
+	assert.NotNil(t, fp.ipsetList["KUBE-LOOP-BACK"])
+	activeEntries2 := fp.ipsetList["KUBE-LOOP-BACK"].activeEntries
+	assert.Equal(t, 0, activeEntries2.Len(), "Expected 0 active entries in KUBE-LOOP-BACK")
+	virtualServers2, vsErr2 := ipvs.GetVirtualServers()
+	assert.Nil(t, vsErr2, "Expected no error getting virtual servers")
+	assert.Len(t, virtualServers2, 1, "Expected 1 virtual server")
+	realServers2, rsErr2 := ipvs.GetRealServers(virtualServers2[0])
+	assert.Nil(t, rsErr2, "Expected no error getting real servers")
+	assert.Len(t, realServers2, 0, "Expected 0 real servers")
 }

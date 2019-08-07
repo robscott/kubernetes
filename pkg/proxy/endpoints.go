@@ -25,7 +25,8 @@ import (
 
 	"k8s.io/klog"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
+	discovery "k8s.io/api/discovery/v1alpha1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/record"
@@ -91,6 +92,8 @@ type EndpointChangeTracker struct {
 	items map[types.NamespacedName]*endpointsChange
 	// makeEndpointInfo allows proxier to inject customized information when processing endpoint.
 	makeEndpointInfo makeEndpointFunc
+	// endpointSliceCache holds a simplified version of endpoint slices
+	endpointSliceCache *EndpointSliceCache
 	// isIPv6Mode indicates if change tracker is under IPv6/IPv4 mode. Nil means not applicable.
 	isIPv6Mode *bool
 	recorder   record.EventRecorder
@@ -108,6 +111,7 @@ func NewEndpointChangeTracker(hostname string, makeEndpointInfo makeEndpointFunc
 		isIPv6Mode:             isIPv6Mode,
 		recorder:               recorder,
 		lastChangeTriggerTimes: make(map[types.NamespacedName][]time.Time),
+		endpointSliceCache:     NewEndpointSliceCache(hostname, isIPv6Mode, recorder, makeEndpointInfo),
 	}
 }
 
@@ -140,7 +144,7 @@ func (ect *EndpointChangeTracker) Update(previous, current *v1.Endpoints) bool {
 		change.previous = ect.endpointsToEndpointsMap(previous)
 		ect.items[namespacedName] = change
 	}
-	if t := getLastChangeTriggerTime(endpoints); !t.IsZero() {
+	if t := getLastChangeTriggerTime(endpoints.Annotations); !t.IsZero() {
 		ect.lastChangeTriggerTimes[namespacedName] =
 			append(ect.lastChangeTriggerTimes[namespacedName], t)
 	}
@@ -161,19 +165,77 @@ func (ect *EndpointChangeTracker) Update(previous, current *v1.Endpoints) bool {
 	return len(ect.items) > 0
 }
 
+// EndpointSliceUpdate updates given service's endpoints change map based on the <previous, current> endpoints pair.
+// It returns true if items changed, otherwise return false. Will add/update/delete items of EndpointsChangeMap.
+// If removeSlice is true, slice will be removed, otherwise it will be added or updated.
+func (ect *EndpointChangeTracker) EndpointSliceUpdate(endpointSlice *discovery.EndpointSlice, removeSlice bool) bool {
+	// This should never happen
+	if endpointSlice == nil {
+		return false
+	}
+
+	namespacedName, _ := EndpointSliceCacheKeys(endpointSlice)
+
+	metrics.EndpointChangesTotal.Inc()
+
+	ect.lock.Lock()
+	defer ect.lock.Unlock()
+
+	change, exists := ect.items[namespacedName]
+	if !exists {
+		change = &endpointsChange{}
+		change.previous = ect.endpointSliceCache.GetEndpointsMap(namespacedName)
+		ect.items[namespacedName] = change
+	}
+
+	if removeSlice {
+		ect.endpointSliceCache.Delete(endpointSlice)
+	} else {
+		ect.endpointSliceCache.Update(endpointSlice)
+	}
+
+	if t := getLastChangeTriggerTime(endpointSlice.Annotations); !t.IsZero() {
+		ect.lastChangeTriggerTimes[namespacedName] =
+			append(ect.lastChangeTriggerTimes[namespacedName], t)
+	}
+
+	change.current = ect.endpointSliceCache.GetEndpointsMap(namespacedName)
+	// if change.previous equal to change.current, it means no change
+	if reflect.DeepEqual(change.previous, change.current) {
+		delete(ect.items, namespacedName)
+		// Reset the lastChangeTriggerTimes for this service. Given that the network programming
+		// SLI is defined as the duration between a time of an event and a time when the network was
+		// programmed to incorporate that event, if there are events that happened between two
+		// consecutive syncs and that canceled each other out, e.g. pod A added -> pod A deleted,
+		// there will be no network programming for them and thus no network programming latency metric
+		// should be exported.
+		delete(ect.lastChangeTriggerTimes, namespacedName)
+	}
+
+	metrics.EndpointChangesPending.Set(float64(len(ect.items)))
+	return len(ect.items) > 0
+}
+
+// CacheEndpointSlices loads endpoint slices into the cache
+func (ect *EndpointChangeTracker) CacheEndpointSlices(endpointSlices []*discovery.EndpointSlice) {
+	for _, endpointSlice := range endpointSlices {
+		ect.endpointSliceCache.Update(endpointSlice)
+	}
+}
+
 // getLastChangeTriggerTime returns the time.Time value of the EndpointsLastChangeTriggerTime
 // annotation stored in the given endpoints object or the "zero" time if the annotation wasn't set
 // or was set incorrectly.
-func getLastChangeTriggerTime(endpoints *v1.Endpoints) time.Time {
-	if _, ok := endpoints.Annotations[v1.EndpointsLastChangeTriggerTime]; !ok {
+func getLastChangeTriggerTime(annotations map[string]string) time.Time {
+	if _, ok := annotations[v1.EndpointsLastChangeTriggerTime]; !ok {
 		// It's possible that the Endpoints object won't have the EndpointsLastChangeTriggerTime
 		// annotation set. In that case return the 'zero value', which is ignored in the upstream code.
 		return time.Time{}
 	}
-	val, err := time.Parse(time.RFC3339Nano, endpoints.Annotations[v1.EndpointsLastChangeTriggerTime])
+	val, err := time.Parse(time.RFC3339Nano, annotations[v1.EndpointsLastChangeTriggerTime])
 	if err != nil {
 		klog.Warningf("Error while parsing EndpointsLastChangeTriggerTimeAnnotation: '%s'. Error is %v",
-			endpoints.Annotations[v1.EndpointsLastChangeTriggerTime], err)
+			annotations[v1.EndpointsLastChangeTriggerTime], err)
 		// In case of error val = time.Zero, which is ignored in the upstream code.
 	}
 	return val

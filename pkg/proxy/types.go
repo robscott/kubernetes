@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"net"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/kubernetes/pkg/proxy/config"
 )
@@ -28,6 +28,7 @@ import (
 // ProxyProvider is the interface provided by proxier implementations.
 type ProxyProvider interface {
 	config.EndpointsHandler
+	config.EndpointSliceHandler
 	config.ServiceHandler
 
 	// Sync immediately synchronizes the ProxyProvider's current state to proxy rules.

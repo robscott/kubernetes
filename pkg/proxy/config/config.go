@@ -20,9 +20,11 @@ import (
 	"fmt"
 	"time"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
+	discovery "k8s.io/api/discovery/v1alpha1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	coreinformers "k8s.io/client-go/informers/core/v1"
+	discoveryinformers "k8s.io/client-go/informers/discovery/v1alpha1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog"
 	"k8s.io/kubernetes/pkg/controller"
@@ -60,6 +62,22 @@ type EndpointsHandler interface {
 	// OnEndpointsSynced is called once all the initial event handlers were
 	// called and the state is fully propagated to local cache.
 	OnEndpointsSynced()
+}
+
+// EndpointSliceHandler is an abstract interface of objects which receive
+// notifications about endpoint slice object changes.
+type EndpointSliceHandler interface {
+	// CacheEndpointSlices should cache all specified endpoint slices
+	CacheEndpointSlices(endpointSlice []*discovery.EndpointSlice)
+	// OnEndpointSliceUpdate is called whenever an endpoint slice is
+	// added or updated.
+	OnEndpointSliceUpdate(endpointSlice *discovery.EndpointSlice)
+	// OnEndpointSliceDelete is called whenever deletion of an existing
+	// endpoint slice object is observed.
+	OnEndpointSliceDelete(endpointSlice *discovery.EndpointSlice)
+	// OnEndpointSliceSynced is called once all the initial event handlers were
+	// called and the state is fully propagated to local cache.
+	OnEndpointSliceSynced()
 }
 
 // EndpointsConfig tracks a set of endpoints configurations.
@@ -150,6 +168,92 @@ func (c *EndpointsConfig) handleDeleteEndpoints(obj interface{}) {
 	for i := range c.eventHandlers {
 		klog.V(4).Infof("Calling handler.OnEndpointsDelete")
 		c.eventHandlers[i].OnEndpointsDelete(endpoints)
+	}
+}
+
+// EndpointSliceConfig tracks a set of endpoints configurations.
+type EndpointSliceConfig struct {
+	listerSynced  cache.InformerSynced
+	eventHandlers []EndpointSliceHandler
+}
+
+// NewEndpointSliceConfig creates a new EndpointSliceConfig.
+func NewEndpointSliceConfig(endpointSliceInformer discoveryinformers.EndpointSliceInformer, resyncPeriod time.Duration) *EndpointSliceConfig {
+	result := &EndpointSliceConfig{
+		listerSynced: endpointSliceInformer.Informer().HasSynced,
+	}
+
+	endpointSliceInformer.Informer().AddEventHandlerWithResyncPeriod(
+		cache.ResourceEventHandlerFuncs{
+			AddFunc:    result.handleAddEndpointSlice,
+			UpdateFunc: result.handleUpdateEndpointSlice,
+			DeleteFunc: result.handleDeleteEndpointSlice,
+		},
+		resyncPeriod,
+	)
+
+	return result
+}
+
+// RegisterEventHandler registers a handler which is called on every endpoint slice change.
+func (c *EndpointSliceConfig) RegisterEventHandler(handler EndpointSliceHandler) {
+	c.eventHandlers = append(c.eventHandlers, handler)
+}
+
+// Run waits for cache synced and invokes handlers after syncing.
+func (c *EndpointSliceConfig) Run(stopCh <-chan struct{}) {
+	klog.Info("Starting endpoint slice config controller")
+
+	if !controller.WaitForCacheSync("endpoint slice config", stopCh, c.listerSynced) {
+		return
+	}
+
+	for i := range c.eventHandlers {
+		klog.V(3).Infof("Calling handler.OnEndpointSliceSynced()")
+		c.eventHandlers[i].OnEndpointSliceSynced()
+	}
+}
+
+func (c *EndpointSliceConfig) handleAddEndpointSlice(obj interface{}) {
+	endpointSlice, ok := obj.(*discovery.EndpointSlice)
+	if !ok {
+		utilruntime.HandleError(fmt.Errorf("unexpected object type: %v", obj))
+		return
+	}
+	for i := range c.eventHandlers {
+		klog.V(4).Infof("Calling handler.OnEndpointSliceUpdate")
+		c.eventHandlers[i].OnEndpointSliceUpdate(endpointSlice)
+	}
+}
+
+func (c *EndpointSliceConfig) handleUpdateEndpointSlice(oldObj, newObj interface{}) {
+	endpointSlice, ok := newObj.(*discovery.EndpointSlice)
+	if !ok {
+		utilruntime.HandleError(fmt.Errorf("unexpected object type: %v", newObj))
+		return
+	}
+	for i := range c.eventHandlers {
+		klog.V(4).Infof("Calling handler.OnEndpointSliceUpdate")
+		c.eventHandlers[i].OnEndpointSliceUpdate(endpointSlice)
+	}
+}
+
+func (c *EndpointSliceConfig) handleDeleteEndpointSlice(obj interface{}) {
+	endpointSlice, ok := obj.(*discovery.EndpointSlice)
+	if !ok {
+		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+		if !ok {
+			utilruntime.HandleError(fmt.Errorf("unexpected object type: %v", obj))
+			return
+		}
+		if endpointSlice, ok = tombstone.Obj.(*discovery.EndpointSlice); !ok {
+			utilruntime.HandleError(fmt.Errorf("unexpected object type: %v", obj))
+			return
+		}
+	}
+	for i := range c.eventHandlers {
+		klog.V(4).Infof("Calling handler.OnEndpointsDelete")
+		c.eventHandlers[i].OnEndpointSliceDelete(endpointSlice)
 	}
 }
 

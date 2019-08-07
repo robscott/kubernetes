@@ -29,11 +29,13 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
-	v1meta "k8s.io/apimachinery/pkg/apis/meta/v1"
+	discovery "k8s.io/api/discovery/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
+	features "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/server/healthz"
 	"k8s.io/apiserver/pkg/server/mux"
 	"k8s.io/apiserver/pkg/server/routes"
@@ -478,6 +480,7 @@ type ProxyServer struct {
 	CleanupIPVS            bool
 	MetricsBindAddress     string
 	EnableProfiling        bool
+	UseEndpointSlices      bool
 	OOMScoreAdj            *int32
 	ConfigSyncPeriod       time.Duration
 	HealthzServer          *healthcheck.HealthzServer
@@ -607,11 +610,11 @@ func (s *ProxyServer) Run() error {
 	}
 
 	informerFactory := informers.NewSharedInformerFactoryWithOptions(s.Client, s.ConfigSyncPeriod,
-		informers.WithTweakListOptions(func(options *v1meta.ListOptions) {
+		informers.WithTweakListOptions(func(options *metav1.ListOptions) {
 			options.LabelSelector = "!" + apis.LabelServiceProxyName
 		}))
 
-	// Create configs (i.e. Watches for Services and Endpoints)
+	// Create configs (i.e. Watches for Services and Endpoints or EndpointSlices)
 	// Note: RegisterHandler() calls need to happen before creation of Sources because sources
 	// only notify on changes, and the initial update (on process start) may be lost if no handlers
 	// are registered yet.
@@ -619,9 +622,25 @@ func (s *ProxyServer) Run() error {
 	serviceConfig.RegisterEventHandler(s.Proxier)
 	go serviceConfig.Run(wait.NeverStop)
 
-	endpointsConfig := config.NewEndpointsConfig(informerFactory.Core().V1().Endpoints(), s.ConfigSyncPeriod)
-	endpointsConfig.RegisterEventHandler(s.Proxier)
-	go endpointsConfig.Run(wait.NeverStop)
+	if utilfeature.DefaultFeatureGate.Enabled(features.EndpointSlice) {
+		endpointSliceConfig := config.NewEndpointSliceConfig(informerFactory.Discovery().V1alpha1().EndpointSlices(), s.ConfigSyncPeriod)
+		endpointSliceConfig.RegisterEventHandler(s.Proxier)
+		go endpointSliceConfig.Run(wait.NeverStop)
+
+		sliceList, err := s.Client.DiscoveryV1alpha1().EndpointSlices("").List(metav1.ListOptions{})
+		if err != nil {
+			return err
+		}
+		slices := []*discovery.EndpointSlice{}
+		for _, slice := range sliceList.Items {
+			slices = append(slices, &slice)
+		}
+		s.Proxier.CacheEndpointSlices(slices)
+	} else {
+		endpointsConfig := config.NewEndpointsConfig(informerFactory.Core().V1().Endpoints(), s.ConfigSyncPeriod)
+		endpointsConfig.RegisterEventHandler(s.Proxier)
+		go endpointsConfig.Run(wait.NeverStop)
+	}
 
 	// This has to start after the calls to NewServiceConfig and NewEndpointsConfig because those
 	// functions must configure their shared informer event handlers first.

@@ -132,6 +132,12 @@ const (
 	//
 	// Enables managing request concurrency with prioritization and fairness at each server
 	RequestManagement featuregate.Feature = "RequestManagement"
+
+	// owner: @robscott @freehan
+	// alpha: v1.16
+	//
+	// Enable EndpointSlice as source for kube-proxy
+	EndpointSlice featuregate.Feature = "EndpointSlice"
 )
 
 func init() {
@@ -156,4 +162,5 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 	WinDSR:                  {Default: false, PreRelease: featuregate.Alpha},
 	WatchBookmark:           {Default: true, PreRelease: featuregate.Beta},
 	RequestManagement:       {Default: false, PreRelease: featuregate.Alpha},
+	EndpointSlice:           {Default: false, PreRelease: featuregate.Alpha},
 }

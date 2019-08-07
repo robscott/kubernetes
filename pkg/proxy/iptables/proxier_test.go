@@ -28,7 +28,9 @@ import (
 
 	"k8s.io/klog"
 
-	"k8s.io/api/core/v1"
+	"github.com/stretchr/testify/assert"
+	v1 "k8s.io/api/core/v1"
+	discovery "k8s.io/api/discovery/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -2248,6 +2250,119 @@ func Test_updateEndpointsMap(t *testing.T) {
 			t.Errorf("[%d] expected healthchecks %v, got %v", tci, tc.expectedHealthchecks, result.HCEndpointsLocalIPSize)
 		}
 	}
+}
+
+// The majority of EndpointSlice specific tests are not iptables specific and focus on
+// the shared EndpointChangeTracker and EndpointSliceCache. This test ensures that the
+// iptables proxier supports translating EndpointSlices to iptables output.
+func TestEndpointSliceE2E(t *testing.T) {
+	expectedIPTablesWithoutSlice := `*filter
+:KUBE-SERVICES - [0:0]
+:KUBE-EXTERNAL-SERVICES - [0:0]
+:KUBE-FORWARD - [0:0]
+-A KUBE-SERVICES -m comment --comment "ns1/svc1: has no endpoints" -m  -p  -d 172.20.1.1/32 --dport 0 -j REJECT
+-A KUBE-FORWARD -m conntrack --ctstate INVALID -j DROP
+-A KUBE-FORWARD -m comment --comment "kubernetes forwarding rules" -m mark --mark  -j ACCEPT
+-A KUBE-FORWARD -s 10.0.0.0/24 -m comment --comment "kubernetes forwarding conntrack pod source rule" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A KUBE-FORWARD -m comment --comment "kubernetes forwarding conntrack pod destination rule" -d 10.0.0.0/24 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+COMMIT
+*nat
+:KUBE-SERVICES - [0:0]
+:KUBE-NODEPORTS - [0:0]
+:KUBE-POSTROUTING - [0:0]
+:KUBE-MARK-MASQ - [0:0]
+:KUBE-SVC-3WUAALNGPYZZAWAD - [0:0]
+-A KUBE-POSTROUTING -m comment --comment "kubernetes service traffic requiring SNAT" -m mark --mark  -j MASQUERADE
+-A KUBE-MARK-MASQ -j MARK --set-xmark 
+-X KUBE-SVC-3WUAALNGPYZZAWAD
+-A KUBE-SERVICES -m comment --comment "kubernetes service nodeports; NOTE: this must be the last rule in this chain" -m addrtype --dst-type LOCAL -j KUBE-NODEPORTS
+COMMIT
+`
+
+	expectedIPTablesWithSlice := `*filter
+:KUBE-SERVICES - [0:0]
+:KUBE-EXTERNAL-SERVICES - [0:0]
+:KUBE-FORWARD - [0:0]
+-A KUBE-FORWARD -m conntrack --ctstate INVALID -j DROP
+-A KUBE-FORWARD -m comment --comment "kubernetes forwarding rules" -m mark --mark  -j ACCEPT
+-A KUBE-FORWARD -s 10.0.0.0/24 -m comment --comment "kubernetes forwarding conntrack pod source rule" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-A KUBE-FORWARD -m comment --comment "kubernetes forwarding conntrack pod destination rule" -d 10.0.0.0/24 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+COMMIT
+*nat
+:KUBE-SERVICES - [0:0]
+:KUBE-NODEPORTS - [0:0]
+:KUBE-POSTROUTING - [0:0]
+:KUBE-MARK-MASQ - [0:0]
+:KUBE-SVC-3WUAALNGPYZZAWAD - [0:0]
+: - [0:0]
+: - [0:0]
+: - [0:0]
+-A KUBE-POSTROUTING -m comment --comment "kubernetes service traffic requiring SNAT" -m mark --mark  -j MASQUERADE
+-A KUBE-MARK-MASQ -j MARK --set-xmark 
+-A KUBE-SERVICES -m comment --comment "ns1/svc1: cluster IP" -m  -p  -d 172.20.1.1/32 --dport 0 ! -s 10.0.0.0/24 -j KUBE-MARK-MASQ
+-A KUBE-SERVICES -m comment --comment "ns1/svc1: cluster IP" -m  -p  -d 172.20.1.1/32 --dport 0 -j KUBE-SVC-3WUAALNGPYZZAWAD
+-A KUBE-SVC-3WUAALNGPYZZAWAD -m statistic --mode random --probability 0.33333 -j 
+-A  -s 10.0.1.1/32 -j KUBE-MARK-MASQ
+-A  -m  -p  -j DNAT --to-destination 10.0.1.1:80
+-A KUBE-SVC-3WUAALNGPYZZAWAD -m statistic --mode random --probability 0.50000 -j 
+-A  -s 10.0.1.2/32 -j KUBE-MARK-MASQ
+-A  -m  -p  -j DNAT --to-destination 10.0.1.2:80
+-A KUBE-SVC-3WUAALNGPYZZAWAD -j 
+-A  -s 10.0.1.3/32 -j KUBE-MARK-MASQ
+-A  -m  -p  -j DNAT --to-destination 10.0.1.3:80
+-A KUBE-SERVICES -m comment --comment "kubernetes service nodeports; NOTE: this must be the last rule in this chain" -m addrtype --dst-type LOCAL -j KUBE-NODEPORTS
+COMMIT
+`
+
+	ipt := iptablestest.NewFake()
+	fp := NewFakeProxier(ipt)
+	fp.OnServiceSynced()
+	fp.OnEndpointsSynced()
+	fp.OnEndpointSliceSynced()
+
+	serviceName := "svc1"
+	namespaceName := "ns1"
+
+	fp.OnServiceAdd(&v1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: serviceName, Namespace: namespaceName},
+		Spec: v1.ServiceSpec{
+			ClusterIP: "172.20.1.1",
+			Selector:  map[string]string{"foo": "bar"},
+			Ports:     []v1.ServicePort{{TargetPort: intstr.FromInt(80)}},
+		},
+	})
+
+	ipTargetType := discovery.IPTargetType
+	endpointSlice := &discovery.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            fmt.Sprintf("%s-1", serviceName),
+			Namespace:       namespaceName,
+			OwnerReferences: []metav1.OwnerReference{{Kind: "Service", Name: serviceName}},
+		},
+		Ports:      []discovery.EndpointPort{{Port: utilpointer.Int32Ptr(80)}},
+		TargetType: &ipTargetType,
+		Endpoints: []discovery.Endpoint{{
+			Targets:    []string{"10.0.1.1"},
+			Conditions: discovery.EndpointConditions{Ready: true},
+			Topology:   map[string]string{"kubernetes.io/hostname": testHostname},
+		}, {
+			Targets:    []string{"10.0.1.2"},
+			Conditions: discovery.EndpointConditions{Ready: true},
+			Topology:   map[string]string{"kubernetes.io/hostname": "node2"},
+		}, {
+			Targets:    []string{"10.0.1.3"},
+			Conditions: discovery.EndpointConditions{Ready: true},
+			Topology:   map[string]string{"kubernetes.io/hostname": "node3"},
+		}},
+	}
+
+	fp.OnEndpointSliceUpdate(endpointSlice)
+	fp.syncProxyRules()
+	assert.Equal(t, expectedIPTablesWithSlice, fp.iptablesData.String())
+
+	fp.OnEndpointSliceDelete(endpointSlice)
+	fp.syncProxyRules()
+	assert.Equal(t, expectedIPTablesWithoutSlice, fp.iptablesData.String())
 }
 
 // TODO(thockin): add *more* tests for syncProxyRules() or break it down further and test the pieces.

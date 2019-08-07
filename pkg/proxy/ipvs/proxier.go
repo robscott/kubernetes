@@ -31,6 +31,7 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
+	discovery "k8s.io/api/discovery/v1alpha1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/version"
@@ -184,13 +185,14 @@ type Proxier struct {
 	serviceMap   proxy.ServiceMap
 	endpointsMap proxy.EndpointsMap
 	portsMap     map[utilproxy.LocalPort]utilproxy.Closeable
-	// endpointsSynced and servicesSynced are set to true when corresponding
-	// objects are synced after startup. This is used to avoid updating ipvs rules
-	// with some partial data after kube-proxy restart.
-	endpointsSynced bool
-	servicesSynced  bool
-	initialized     int32
-	syncRunner      *async.BoundedFrequencyRunner // governs calls to syncProxyRules
+	// endpointsSynced, endpointSliceSynced, and servicesSynced are set to true when
+	// corresponding objects are synced after startup. This is used to avoid updating
+	// ipvs rules with some partial data after kube-proxy restart.
+	endpointsSynced     bool
+	endpointSliceSynced bool
+	servicesSynced      bool
+	initialized         int32
+	syncRunner          *async.BoundedFrequencyRunner // governs calls to syncProxyRules
 
 	// These are effectively const and do not need the mutex to be held.
 	syncPeriod    time.Duration
@@ -773,6 +775,40 @@ func (proxier *Proxier) OnEndpointsDelete(endpoints *v1.Endpoints) {
 func (proxier *Proxier) OnEndpointsSynced() {
 	proxier.mu.Lock()
 	proxier.endpointsSynced = true
+	proxier.setInitialized(proxier.servicesSynced && proxier.endpointsSynced)
+	proxier.mu.Unlock()
+
+	// Sync unconditionally - this is called once per lifetime.
+	proxier.syncProxyRules()
+}
+
+// CacheEndpointSlices loads Endpoint Slices into the cache
+func (proxier *Proxier) CacheEndpointSlices(endpointSlices []*discovery.EndpointSlice) {
+	proxier.endpointsChanges.CacheEndpointSlices(endpointSlices)
+	proxier.OnEndpointSliceSynced()
+}
+
+// OnEndpointSliceUpdate is called whenever an endpoint slice creation or
+// deletion is observed.
+func (proxier *Proxier) OnEndpointSliceUpdate(endpointSlice *discovery.EndpointSlice) {
+	if proxier.endpointsChanges.EndpointSliceUpdate(endpointSlice, false) && proxier.isInitialized() {
+		proxier.Sync()
+	}
+}
+
+// OnEndpointSliceDelete is called whenever deletion of an existing endpoint slice
+// object is observed.
+func (proxier *Proxier) OnEndpointSliceDelete(endpointSlice *discovery.EndpointSlice) {
+	if proxier.endpointsChanges.EndpointSliceUpdate(endpointSlice, true) && proxier.isInitialized() {
+		proxier.Sync()
+	}
+}
+
+// OnEndpointSliceSynced is called once all the initial event handlers were
+// called and the state is fully propagated to local cache.
+func (proxier *Proxier) OnEndpointSliceSynced() {
+	proxier.mu.Lock()
+	proxier.endpointSliceSynced = true
 	proxier.setInitialized(proxier.servicesSynced && proxier.endpointsSynced)
 	proxier.mu.Unlock()
 
